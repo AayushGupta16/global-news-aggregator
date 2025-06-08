@@ -12,7 +12,7 @@ async def run_china_scrape_job():
     logging.info("[Scheduler] Starting scheduled Playwright job for China...")
     try:
         # Call the async function with await
-        releases = await fetch_china_press_releases_playwright()
+        releases = await fetch_china_press_releases_browser()
 
         if releases:
             logging.info(f"[Scheduler] Job successful. Found {len(releases)} releases for China via Playwright.")
