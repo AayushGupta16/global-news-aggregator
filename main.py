@@ -9,7 +9,7 @@ from scheduler import setup_scheduler
 from shared_state import jobs
 
 # Import the router from our China module
-from china.routes import router as china_router
+from china.scraping_routes import router
 
 # --- Centralized Logging Configuration ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -50,4 +50,4 @@ async def read_root():
     return {"message": "Welcome! See /docs for available endpoints."}
 
 # --- Include Routers from Modules ---
-app.include_router(china_router)
+app.include_router(router)
