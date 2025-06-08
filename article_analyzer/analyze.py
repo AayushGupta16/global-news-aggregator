@@ -16,10 +16,12 @@ import logging
 import os
 from typing import List, Optional
 from models.models import ArticleAnalysisResult
-# Gemini Import
-from google.generativeai import GenerativeAI
+from google import genai
 
-gemini_client = GenerativeAI(api_key=os.getenv("GEMINI_API_KEY"), model="gemini-2.5-pro")
+gemini_client = genai.Client(api_key='GEMINI_API_KEY')
+
+MODEL = "gemini-1.5-flash"
+
 
 def translate_to_english(text: str) -> str:
     """Translate *text* to English using Gemini (or return as-is if already ENG).
@@ -31,7 +33,7 @@ def translate_to_english(text: str) -> str:
         "into natural, fluent English. Respond with only the translated text "
         "and no additional commentary.\n\n" + text
     )
-    return gemini_client.generate_content(prompt)
+    return gemini_client.models.generate_content(prompt, model=MODEL)
 
 
 def score_relevance(english_text: str) -> int:
@@ -43,7 +45,7 @@ def score_relevance(english_text: str) -> int:
         "Respond with *only* the integer number (no explanation).\n\n" + english_text
     )
 
-    response = gemini_client.generate_content(prompt, temperature=0)
+    response = gemini_client.models.generate_content(prompt, temperature=0, model=MODEL)
     # Extract first integer 1-7.
     for token in response.split():
         if token.strip().isdigit():
@@ -60,7 +62,7 @@ def generate_headline(english_text: str) -> str:
         "Create a catchy, journalist-style headline for the following article. "
         "The headline *must* be exactly two sentences.\n\n" + english_text
     )
-    headline = gemini_client.generate_content(prompt, temperature=0.8, max_tokens=60)
+    headline = gemini_client.models.generate_content(prompt, temperature=0.8, max_tokens=60, model=MODEL)
     return headline.strip()
 
 
@@ -72,7 +74,7 @@ def summarize_article(english_text: str) -> str:
         "paragraph should summarise what the article says. The second "
         "paragraph should explain its broader relevance and implications.\n\n" + english_text
     )
-    summary = gemini_client.generate_content(prompt, temperature=0.5, max_tokens=300)
+    summary = gemini_client.models.generate_content(prompt, temperature=0.5, max_tokens=300, model=MODEL)
     return summary.strip()
 
 
@@ -82,7 +84,7 @@ def tag_categories(english_text: str, max_tags: int = 5) -> List[str]:
         f"Label the following article with up to {max_tags} topical categories. "
         "Return your answer as a JSON array of strings with no additional text.\n\n" + english_text
     )
-    raw = gemini_client.generate_content(prompt, temperature=0.3, max_tokens=60)
+    raw = gemini_client.models.generate_content(prompt, temperature=0.3, max_tokens=60, model=MODEL)
     try:
         tags = json.loads(raw)
         # Make sure we got a list[str]
