@@ -2,7 +2,7 @@
 
 import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from china.routes import fetch_china_press_releases_browser # Import the correct function
+from china.scraping_routes import fetch_china_press_releases_browser # Import the correct function
 
 # The job must be async again
 async def run_china_scrape_job():
@@ -11,17 +11,20 @@ async def run_china_scrape_job():
     """
     logging.info("[Scheduler] Starting scheduled Playwright job for China...")
     try:
-        # Call the async function with await
+        # gets the press releases
         releases = await fetch_china_press_releases_browser()
 
-        if releases:
-            logging.info(f"[Scheduler] Job successful. Found {len(releases)} releases for China via Playwright.")
-            # Post-processing would go here
-        else:
-            logging.warning("[Scheduler] Playwright job for China ran but found no data.")
+        # if no releases were found skip
+        if not releases:
+            logging.info("no press releases for today.")
+            return
+        
+        # if there are releases, post-process them with AI 
+
+
 
     except Exception as e:
-        logging.error(f"[Scheduler] An error occurred during the scheduled China scrape: {e}", exc_info=True)
+        logging.error(f"something fucked up in the scheduler: {e}", exc_info=True)
 
 
 def setup_scheduler():

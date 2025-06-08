@@ -3,7 +3,7 @@ import logging
 from playwright.async_api import async_playwright
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from shared_state import jobs
-from models.models import ScrapeJob
+from models.models import ScrapeJob, ChinaPressRelease
 import time
 
 router = APIRouter(
@@ -11,7 +11,7 @@ router = APIRouter(
     tags=["China"],
 )
 
-async def fetch_china_press_releases_browser(num_pages: int = 1) -> list | None:
+async def fetch_china_press_releases_browser(num_pages: int = 1) -> list[ChinaPressRelease] | None:
     """
     Uses a real browser to bypass bot detection and get the full HTML content.
     """
@@ -337,7 +337,19 @@ async def fetch_china_press_releases_browser(num_pages: int = 1) -> list | None:
             await browser.close()
             logging.info(f"[China Scraper] Total time: {time.time() - start_time:.2f} seconds")
     
-    return all_articles
+    structured_articles = [
+        ChinaPressRelease(
+            country="China",
+            maintitle=article["maintitle"],
+            pub_url=article["pub_url"],
+            publish_date=article["publish_date"],
+            fwzh=article.get("fwzh"),
+            content=article["content"]
+        )
+        for article in all_articles
+    ]
+    return structured_articles
+
 
 async def run_scrape_and_update_status(job_id: str, num_pages: int):
     logging.info(f"[Job {job_id}] Background scrape started for {num_pages} pages.")
