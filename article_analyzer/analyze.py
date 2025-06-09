@@ -17,10 +17,14 @@ import os
 from typing import List, Optional
 from models.models import ArticleAnalysisResult
 from google import genai
+from dotenv import load_dotenv
 
-gemini_client = genai.Client(api_key='GEMINI_API_KEY')
+# Load environment variables
+load_dotenv()
 
-MODEL = "gemini-1.5-flash"
+gemini_client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
+
+MODEL = "gemini-2.5-flash"
 
 
 def translate_to_english(text: str) -> str:
