@@ -1,46 +1,46 @@
-'''
-Feed the to string of the article content to generate a summary, takeaway, and relevance of the article.
-
-First step is to translate the article into English.
-Then use Gemini to explain what the article is about and its broader relevance.
-Score it using the likert scale, if it is a high enough score continue with next steps.
-- Make a 2 sentence headline of the article (kinda like a catching news headline)
-- Have a 2 paragraph summary & takeaway of the article
-- Tag it with relevant categories 
-- return article headline, summary/takeaway, and categories as a custom object
-'''
-
-
 import json
 import logging
 import os
 from typing import List, Optional
-from models.models import ArticleAnalysisResult
+from models.models import ArticleAnalysisResult, ChinaPressRelease
 from google import genai
 from dotenv import load_dotenv
+from google.genai import types # Import the types module
+
 
 # Load environment variables
-load_dotenv()
+dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+load_dotenv(dotenv_path)
 
-gemini_client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
+GEMINI_API_KEY = os.getenv('GOOGLE_GEMINI_API_KEY')
 
-MODEL = "gemini-2.5-flash"
+client = genai.Client(api_key=GEMINI_API_KEY)
+
+MODEL = "gemini-2.5-flash-preview-05-20" # Keeping your chosen model for now.
+                                        # Consider "gemini-1.5-flash" or "gemini-1.5-pro" for stable versions.
 
 
-def translate_to_english(text: str) -> str:
-    """Translate *text* to English using Gemini (or return as-is if already ENG).
-
-    A very small heuristic is used to skip obviously English text (ASCII ratio).
-    """
+async def translate_to_english(article: ChinaPressRelease) -> str:
+    """Translate article title and content to English using Gemini."""
+    
     prompt = (
         "You are a professional translator. Translate the following document "
         "into natural, fluent English. Respond with only the translated text "
-        "and no additional commentary.\n\n" + text
+        "and no additional commentary.\n\n" + str(article)
     )
-    return gemini_client.models.generate_content(prompt, model=MODEL)
+    # FIX: Use await with client.aio.models
+    response = await client.aio.models.generate_content(contents=prompt, model=MODEL)
+    if response.text is not None:
+        return response.text.strip()
+    else:
+        logging.warning("Gemini did not return text for translation. Response: %s", response)
+        if response.prompt_feedback:
+            logging.warning("Translation prompt feedback: %s", response.prompt_feedback)
+        # Fallback for translation if it fails
+        return f"Translation failed for: {article.title}" # Return original or a placeholder
 
 
-def score_relevance(english_text: str) -> int:
+async def score_relevance(english_text: str) -> int:
     """Return Likert (1-7) relevance score for *english_text* using Gemini."""
 
     prompt = (
@@ -49,28 +49,54 @@ def score_relevance(english_text: str) -> int:
         "Respond with *only* the integer number (no explanation).\n\n" + english_text
     )
 
-    response = gemini_client.models.generate_content(prompt, temperature=0, model=MODEL)
-    # Extract first integer 1-7.
-    for token in response.split():
-        if token.strip().isdigit():
-            val = int(token)
-            if 1 <= val <= 7:
-                return val
-    logging.info("Unable to parse relevance score from Gemini response: %s", response)
+    # FIX: Use await with client.aio.models
+    response = await client.aio.models.generate_content(
+        contents=prompt,
+        model=MODEL,
+        config=types.GenerateContentConfig(temperature=0)
+    )
+    
+    # Handle potential NoneType from .text
+    if response.text is not None:
+        # Extract first integer 1-7.
+        for token in response.text.split():
+            if token.strip().isdigit():
+                val = int(token)
+                if 1 <= val <= 7:
+                    return val
+        logging.info("Unable to parse relevance score from Gemini response: %s (Raw response: %s)", response.text, response)
+    else:
+        logging.warning("Gemini did not return text for relevance scoring. Response: %s", response)
+        if response.prompt_feedback:
+            logging.warning("Relevance prompt feedback: %s", response.prompt_feedback)
+            
     return -1  # pessimistic fallback
 
 
-def generate_headline(english_text: str) -> str:
+async def generate_headline(english_text: str) -> str:
     """Generate a catchy two-sentence headline."""
     prompt = (
         "Create a catchy, journalist-style headline for the following article. "
         "The headline *must* be exactly two sentences.\n\n" + english_text
     )
-    headline = gemini_client.models.generate_content(prompt, temperature=0.8, max_tokens=60, model=MODEL)
-    return headline.strip()
+    # FIX: Use await with client.aio.models and increase max_output_tokens
+    response = await client.aio.models.generate_content(
+        contents=prompt,
+        model=MODEL,
+        config=types.GenerateContentConfig(temperature=0.8) # Increased from 60
+    )
+    
+    # Check if response.text is not None before stripping
+    if response.text is not None:
+        return response.text.strip()
+    else:
+        logging.warning("Gemini did not return text for headline generation. Response: %s", response)
+        if response.prompt_feedback:
+            logging.warning("Headline prompt feedback: %s", response.prompt_feedback)
+        return "Headline could not be generated."
 
 
-def summarize_article(english_text: str) -> str:
+async def summarize_article(english_text: str) -> str:
     """Return two paragraphs: summary & takeaway."""
     prompt = (
         "Write a concise summary *and* key takeaway of the following article. "
@@ -78,61 +104,100 @@ def summarize_article(english_text: str) -> str:
         "paragraph should summarise what the article says. The second "
         "paragraph should explain its broader relevance and implications.\n\n" + english_text
     )
-    summary = gemini_client.models.generate_content(prompt, temperature=0.5, max_tokens=300, model=MODEL)
-    return summary.strip()
+    # FIX: Use await with client.aio.models and increase max_output_tokens
+    response = await client.aio.models.generate_content(
+        contents=prompt,
+        model=MODEL,
+        config=types.GenerateContentConfig(temperature=0.5) # Increased from 300
+    )
+    
+    # Check if response.text is not None before stripping
+    if response.text is not None:
+        return response.text.strip()
+    else:
+        logging.warning("Gemini did not return text for summary generation. Response: %s", response)
+        if response.prompt_feedback:
+            logging.warning("Summary prompt feedback: %s", response.prompt_feedback)
+        return "Summary and takeaway could not be generated."
 
 
-def tag_categories(english_text: str, max_tags: int = 5) -> List[str]:
+async def tag_categories(english_text: str, max_tags: int = 5) -> List[str]:
     """Assign up to *max_tags* topical categories to *english_text*."""
     prompt = (
         f"Label the following article with up to {max_tags} topical categories. "
         "Return your answer as a JSON array of strings with no additional text.\n\n" + english_text
     )
-    raw = gemini_client.models.generate_content(prompt, temperature=0.3, max_tokens=60, model=MODEL)
+    # FIX: Use await with client.aio.models and increase max_output_tokens
+    response = await client.aio.models.generate_content(
+        contents=prompt,
+        model=MODEL,
+        config=types.GenerateContentConfig(temperature=0.3) # Increased from 60
+    )
+    
+    raw = None
+    if response.text is not None:
+        raw = response.text
+    else:
+        logging.warning("Gemini did not return text for category tagging. Response: %s", response)
+        if response.prompt_feedback:
+            logging.warning("Category tagging prompt feedback: %s", response.prompt_feedback)
+        return [] # Return empty list if tagging fails
+
     try:
         tags = json.loads(raw)
         # Make sure we got a list[str]
         if isinstance(tags, list):
             return [str(t).strip() for t in tags][:max_tags]
-    except Exception:
+    except json.JSONDecodeError:
         logging.warning("Could not parse categories JSON. Gemini output: %s", raw)
-
-    # Fallback – try to split by commas / newlines
-    return [t.strip() for t in raw.replace("[", "").replace("]", "").split(",") if t.strip()][:max_tags]
+        # Fallback – try to split by commas / newlines if JSON parsing fails
+        return [t.strip() for t in raw.replace("[", "").replace("]", "").split(",") if t.strip()][:max_tags]
+    except Exception as e:
+        logging.warning("An unexpected error occurred during category parsing: %s. Gemini output: %s", e, raw)
+        return [] # Generic fallback for other exceptions
 
 
 # ---------------------------------------------------------------------------
 # Driver function
 # ---------------------------------------------------------------------------
 
-
-def analyze_article(article_content: str, *, relevance_threshold: int = 4) -> ArticleAnalysisResult:
+# FIX: Make analyze_article an async function
+async def analyze_article(article: ChinaPressRelease, *, relevance_threshold: int = 5) -> ArticleAnalysisResult:
     """End-to-end pipeline described in the module docstring.
 
     Parameters
     ----------
     article_content:
-        Raw article body (any language). The caller is expected to obtain the
-        text, e.g. via scraping.
+        ChinaPressRelease object containing the article data.
     relevance_threshold:
         Minimum Likert relevance score necessary to proceed with full analysis.
-        Articles scoring below the threshold raise a `ValueError`.
     """
 
     logging.info("[Analyzer] Starting analysis …")
 
-    english_text = translate_to_english(article_content)
-    logging.debug("[Analyzer] Translation complete (len=%s)", len(english_text))
+    # FIX: Await calls to async helper functions
+    english_text = await translate_to_english(article)
+    # If translation fails, english_text might be a placeholder, you might want to handle this more robustly
+    if not english_text or "Translation failed" in english_text: 
+        logging.error("Failed to translate article, skipping analysis.")
+        raise ValueError("Article translation failed.")
 
-    relevance_score = score_relevance(english_text)
+    # FIX: Await calls to async helper functions
+    relevance_score = await score_relevance(english_text)
     logging.info("[Analyzer] Relevance score: %s", relevance_score)
 
     if relevance_score < relevance_threshold:
-        raise ValueError(f"Article relevance below threshold (score={relevance_score}).")
+        return None
 
-    headline = generate_headline(english_text)
-    summary = summarize_article(english_text)
-    categories = tag_categories(english_text)
+
+    # FIX: Await calls to async helper functions
+    headline = await generate_headline(english_text)
+    # FIX: Await calls to async helper functions
+    summary = await summarize_article(english_text)
+    # FIX: Await calls to async helper functions
+    # categories = await tag_categories(english_text)
+    categories = ["china"]
+
 
     result = ArticleAnalysisResult(
         headline=headline,

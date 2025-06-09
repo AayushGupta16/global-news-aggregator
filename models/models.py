@@ -18,6 +18,11 @@ class ChinaPressRelease(BaseModel):
     publish_date: str = Field(..., description="The date the press release was published.")
     fwzh: str | None = Field(None, description="The FWZH (发文字号) of the press release.")
     content: str = Field(..., description="The content of the press release.")
+    def __str__(self) -> str:
+        """Return formatted text including title and content for translation."""
+        return f"Title: {self.maintitle}\n\nContent: {self.content}"
+
+    
 
 class ArticleAnalysisResult(BaseModel):
     """Final analysis result returned by `analyze_article`."""
@@ -26,3 +31,6 @@ class ArticleAnalysisResult(BaseModel):
     summary: str = Field(..., description="Two paragraph summary & takeaway in English.")
     categories: List[str] = Field(..., description="List of tags that categorise the article.")
     relevance_score: int = Field(..., ge=1, le=7, description="Likert scale relevance score (1-7).")
+    def __str__(self) -> str:
+        """Return a formatted string representation."""
+        return f"{self.headline}\n{self.summary}"

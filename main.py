@@ -30,7 +30,7 @@ app = FastAPI(
     title="Multi-Country Press Release Monitor",
     description="A service to automatically scrape press releases from various government websites.",
     version="1.1.0", # Version bump!
-    # lifespan=lifespan
+    lifespan=lifespan
 )
 
 # --- NEW: Job Status Endpoint ---
