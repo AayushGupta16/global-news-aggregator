@@ -5,8 +5,13 @@ from typing import List, Optional
 from models.models import ArticleAnalysisResult, ChinaPressRelease
 from google import genai
 from google.genai import types
-from shared_state import GEMINI_API_KEY
+from dotenv import load_dotenv
+import os
 
+# Load environment variables
+dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+load_dotenv(dotenv_path)
+GEMINI_API_KEY = os.getenv('GOOGLE_GEMINI_API_KEY')
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 

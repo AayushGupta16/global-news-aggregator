@@ -9,6 +9,13 @@ from pydantic import SecretStr
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from shared_state import jobs
 from models.models import ScrapeJob, ChinaPressRelease, ChinaPressReleaseList
+from dotenv import load_dotenv
+import os
+
+# Load environment variables
+dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+load_dotenv(dotenv_path)
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 
 
 router = APIRouter(
@@ -24,18 +31,15 @@ async def fetch_china_press_releases_agent(num_pages: int = 1) -> Optional[List[
     start_time = time.time()
 
     # --- 1. Configure the LLM ---
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        logging.error("[China Scraper] DEEPSEEK_API_KEY not found in .env file.")
-        raise ValueError("DEEPSEEK_API_KEY is not set.")
-
-    llm = ChatDeepSeek(base_url='https://api.deepseek.com/v1', model='deepseek-chat', api_key=SecretStr(api_key))
+    llm = ChatDeepSeek(base_url='https://api.deepseek.com/v1', model='deepseek-chat', api_key=SecretStr(DEEPSEEK_API_KEY))
 
     # --- 2. Configure the Browser Environment ---
     browser_session = BrowserSession(
         stealth=True,
         headless=True,
         user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        channel='chromium',
+        user_data_dir=None,
         locale='zh-CN',
         viewport={'width': 1920, 'height': 1080},
         extra_http_headers={
@@ -80,12 +84,11 @@ async def fetch_china_press_releases_agent(num_pages: int = 1) -> Optional[List[
         controller=controller,
         browser_session=browser_session,
         use_vision=False,
-        max_steps=100 * num_pages
     )
 
     try:
         logging.info(f"[China Scraper] AI Agent is starting the task. This may take a while...")
-        history = await agent.run()
+        history = await agent.run(max_steps=(100 * num_pages))
         logging.info(f"[China Scraper] AI Agent finished in {time.time() - start_time:.2f} seconds")
 
         final_result = history.final_result()
