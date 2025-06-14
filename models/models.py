@@ -34,3 +34,7 @@ class ArticleAnalysisResult(BaseModel):
     def __str__(self) -> str:
         """Return a formatted string representation."""
         return f"{self.headline}\n{self.summary}"
+    
+class ChinaPressReleaseList(ChinaPressRelease):
+    """A wrapper to ask the agent for a list of press releases."""
+    posts: List[ChinaPressRelease]

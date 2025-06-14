@@ -9,7 +9,7 @@ from scheduler import setup_scheduler
 from shared_state import jobs
 
 # Import the router from our China module
-from china.scraping_routes import router
+from china.scraping_routes import router as china_router
 
 # --- Centralized Logging Configuration ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -30,7 +30,7 @@ app = FastAPI(
     title="Multi-Country Press Release Monitor",
     description="A service to automatically scrape press releases from various government websites.",
     version="1.1.0", # Version bump!
-    lifespan=lifespan
+    # lifespan=lifespan
 )
 
 # --- NEW: Job Status Endpoint ---
@@ -50,4 +50,4 @@ async def read_root():
     return {"message": "Welcome! See /docs for available endpoints."}
 
 # --- Include Routers from Modules ---
-app.include_router(router)
+app.include_router(china_router)

@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from china.scraping_routes import fetch_china_press_releases_browser 
+from china.scraping_routes import fetch_china_press_releases_agent 
 from article_analyzer.analyze import analyze_article
 from emailing.email import send_email
 
@@ -20,7 +20,7 @@ async def run_china_scrape_job():
     logging.info("[Scheduler] Starting scheduled Playwright job for China...")
     try:
         # gets the press releases
-        releases = await fetch_china_press_releases_browser()
+        releases = await fetch_china_press_releases_agent()
 
         # if no releases were found skip
         if not releases:

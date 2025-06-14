@@ -4,20 +4,14 @@ import os
 from typing import List, Optional
 from models.models import ArticleAnalysisResult, ChinaPressRelease
 from google import genai
-from dotenv import load_dotenv
-from google.genai import types # Import the types module
+from google.genai import types
+from shared_state import GEMINI_API_KEY
 
-
-# Load environment variables
-dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
-load_dotenv(dotenv_path)
-
-GEMINI_API_KEY = os.getenv('GOOGLE_GEMINI_API_KEY')
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-MODEL = "gemini-2.5-flash-preview-05-20" # Keeping your chosen model for now.
-                                        # Consider "gemini-1.5-flash" or "gemini-1.5-pro" for stable versions.
+MODEL = "gemini-2.5-flash-preview-05-20" 
+                                       
 
 
 async def translate_to_english(article: ChinaPressRelease) -> str:

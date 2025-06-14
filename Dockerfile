@@ -1,11 +1,9 @@
 # Dockerfile
 
-# Use the official Microsoft Playwright image for Python 3.12
-# This base image includes Python and all necessary system dependencies for browsers.
-FROM mcr.microsoft.com/playwright/python:v1.52.0-jammy
+# Use a standard Python image. bookworm is based on Debian 12.
+FROM python:3.12-bookworm
 
-# --- VNC and GUI Setup ---
-# Install a lightweight window manager, VNC server, and other tools
+# 1. Install OS-level dependencies first (your VNC tools)
 RUN apt-get update && apt-get install -y \
     fluxbox \
     xterm \
@@ -18,8 +16,13 @@ WORKDIR /app
 # Copy the requirements file first
 COPY requirements.txt .
 
-# Install Python dependencies
+# 2. Install your Python packages from requirements.txt
+# This command will install 'browser-use', which in turn installs the 'playwright' Python package.
 RUN pip install --no-cache-dir -r requirements.txt
+
+# 3. NOW that the 'playwright' Python package is installed, you can use its command-line tool
+# to install the browser binaries and their MANY system dependencies.
+RUN playwright install --with-deps chromium
 
 # Copy the rest of your application code into the container
 COPY . .
