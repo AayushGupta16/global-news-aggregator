@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
-from typing import Dict, Any, Literal, List
+from typing import Dict, Any, Literal, List, Optional
+
 
 
 class ScrapeJob(BaseModel):
@@ -38,3 +39,17 @@ class ArticleAnalysisResult(BaseModel):
 class ChinaPressReleaseList(ChinaPressRelease):
     """A wrapper to ask the agent for a list of press releases."""
     posts: List[ChinaPressRelease]
+
+
+class ArticleInfo(ChinaPressRelease):
+    """A simple model for the main agent to find URLs and basic info."""
+    pass
+
+class ArticleInfoList(ChinaPressRelease):
+    """The output model for the main agent's URL discovery task."""
+    posts: List[ArticleInfo]
+
+class ArticleDetails(ChinaPressRelease):
+    """The output model for the parallel extractor agents."""
+    fwzh: Optional[str]
+    content: Optional[str]

@@ -2,140 +2,192 @@ import uuid
 import logging
 import time
 import os
+import asyncio
 from typing import List, Optional
 from browser_use import Agent, BrowserSession, Controller
-from langchain_deepseek import ChatDeepSeek
-from pydantic import SecretStr
+from langchain_google_genai import ChatGoogleGenerativeAI
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from shared_state import jobs
-from models.models import ScrapeJob, ChinaPressRelease, ChinaPressReleaseList
+from models.models import ScrapeJob, ChinaPressRelease, ArticleInfo, ArticleInfoList, ArticleDetails
 from dotenv import load_dotenv
-import os
 
-# Load environment variables
 dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
 load_dotenv(dotenv_path)
-DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
-
+GOOGLE_API_KEY = os.getenv('GOOGLE_GEMINI_API_KEY')
+MODEL = "gemini-2.5-flash-preview-05-20" 
 
 router = APIRouter(
     prefix="/china",
     tags=["China"],
 )
 
+async def extract_details_with_agent(
+    article_info: ArticleInfo,
+    shared_browser_session: BrowserSession,
+    llm: ChatGoogleGenerativeAI,
+    semaphore: asyncio.Semaphore
+) -> Optional[ChinaPressRelease]:
+    async with semaphore:
+        task = f"""
+        You are a specialized data extractor. Your ONLY task is to visit the provided URL and extract two specific pieces of information.
+        URL to visit: {article_info.pub_url}
+
+        Instructions:
+        1. Go to the URL.
+        2. Visually scan the page to find the official document number, which is often labeled '发文字号'. Extract this as the `fwzh`. If it does not exist, set `fwzh` to null.
+        3. Extract the full text content of the press release as `content`.
+        4. Return ONLY these two fields in the required format.
+        """
+        controller = Controller(output_model=ArticleDetails)
+        
+        extractor_agent = Agent(
+            task=task,
+            llm=llm,
+            controller=controller,
+            browser_session=shared_browser_session,
+            use_vision=True,
+            max_failures=3,
+        )
+        
+        try:
+            logging.info(f"[Extractor Agent] Starting for: {article_info.maintitle}")
+            history = await extractor_agent.run(max_steps=15)
+            details_json = history.final_result()
+
+            if not details_json:
+                logging.warning(f"[Extractor Agent] Failed to extract details for {article_info.pub_url}")
+                return None
+            
+            details = ArticleDetails.model_validate_json(details_json)
+
+            return ChinaPressRelease(
+                country="China",
+                maintitle=article_info.maintitle,
+                pub_url=article_info.pub_url,
+                publish_date=article_info.publish_date,
+                fwzh=details.fwzh,
+                content=details.content
+            )
+        except Exception as e:
+            logging.error(f"[Extractor Agent] Error processing {article_info.pub_url}: {e}", exc_info=True)
+            return None
+
+
+# --- Phase 1 & Orchestration ---
 async def fetch_china_press_releases_agent(num_pages: int = 1) -> Optional[List[ChinaPressRelease]]:
-    """
-    Uses a browser-use AI agent to bypass bot detection and scrape content.
-    """
-    logging.info("[China Scraper] Initializing AI Agent with DeepSeek-V3...")
+    logging.info("[Orchestrator] Starting Phase 1: Main Agent URL Discovery...")
     start_time = time.time()
 
-    # --- 1. Configure the LLM ---
-    llm = ChatDeepSeek(base_url='https://api.deepseek.com/v1', model='deepseek-chat', api_key=SecretStr(DEEPSEEK_API_KEY))
+    if not GOOGLE_API_KEY:
+        logging.error("[Orchestrator] GOOGLE_GEMINI_API_KEY not found in .env file.")
+        raise ValueError("GOOGLE_GEMINI_API_KEY is not set.")
 
-    # --- 2. Configure the Browser Environment ---
+    # Initialize LLM once (Your update is kept)
+    llm = ChatGoogleGenerativeAI(model=MODEL, google_api_key=GOOGLE_API_KEY)
+
+    # Define the session but don't start it yet
     browser_session = BrowserSession(
-        stealth=True,
-        headless=True,
-        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        channel='chromium',
-        user_data_dir=None,
-        locale='zh-CN',
-        viewport={'width': 1920, 'height': 1080},
-        extra_http_headers={
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        },
-        args=[
-            '--disable-dev-shm-usage',  # Important for Docker
-            '--disable-gpu',
-            '--no-sandbox',             # Required for Docker
-            '--disable-setuid-sandbox',
-        ]
-    )
-
-    # --- 3. Define the Agent's Task and Output Format ---
-    # The Controller defines the agent's capabilities and desired output format.
-    controller = Controller(output_model=ChinaPressReleaseList)
-
-    # This detailed task prompt replaces all the previous scraping logic.
-    task = f"""
-    Your goal is to scrape Chinese government press releases. You must process exactly {num_pages} page(s) of listings.
-
-    Follow these steps precisely:
-    1.  For each page number from 1 to {num_pages}, construct the correct URL. The URL for page 1 is 'https://www.gov.cn/zhengce/zuixin.htm'. For subsequent pages (e.g., page 2), the URL is 'https://www.gov.cn/zhengce/zuixin_2.htm'.
-    2.  On each listing page, identify all the article links and their publication dates.
-    3.  For each article you find, you MUST navigate to its detail page (`pub_url`).
-    4.  On the article's detail page, extract the following information to populate the fields of the 'ChinaPressRelease' model:
-        - maintitle: The main title of the article.
-        - pub_url: The full URL of the article you are on.
-        - publish_date: The publication date, which you should have from the listing page.
-        - fwzh: The official document number. This is a critical field, often labeled with the text '发文字号' and may look like '国发〔2025〕X号'. Find this specific piece of information. If it does not exist on the page, this field must be null.
-        - content: The full text content of the press release.
-        - country: This field should always be "China".
-    5.  Collect all the extracted 'ChinaPressRelease' objects into the 'posts' list. After processing all articles from all {num_pages} pages, complete the task by returning the final list.
-    """
-
-    # --- 4. Initialize and Run the Agent ---
-    agent = Agent(
-        task=task,
-        llm=llm,
-        controller=controller,
-        browser_session=browser_session,
-        use_vision=False,
+        stealth=True, headless=True, channel='chromium', user_data_dir=None,
+        keep_alive=True,
+        args=['--disable-dev-shm-usage', '--disable-gpu', '--no-sandbox', '--disable-setuid-sandbox']
     )
 
     try:
-        logging.info(f"[China Scraper] AI Agent is starting the task. This may take a while...")
-        history = await agent.run(max_steps=(100 * num_pages))
-        logging.info(f"[China Scraper] AI Agent finished in {time.time() - start_time:.2f} seconds")
+        # --- FIX 1: Manually start the session before creating the first agent ---
+        await browser_session.start()
+        logging.info("[Orchestrator] Shared browser session started.")
 
-        final_result = history.final_result()
+        # --- Run Phase 1: Main "Discoverer" Agent ---
+        discover_controller = Controller(output_model=ArticleInfoList)
+        discover_task = f"""
+        Your goal is to FIND recent Chinese government press releases. You have vision capabilities.
+        IMPORTANT CONTEXT: The current date is June 14th, 2025. You are only interested in articles published on or after June 1, 2025.
 
-        if final_result:
-            # The agent returns a JSON string, which we parse with our Pydantic model.
-            parsed_data = ChinaPressReleaseList.model_validate_json(final_result)
-            logging.info(f"[China Scraper] Successfully parsed {len(parsed_data.posts)} articles from the agent's output.")
-            return parsed_data.posts
-        else:
-            logging.warning("[China Scraper] Agent finished but did not return a final result.")
-            if history.errors():
-                logging.error(f"Agent encountered errors: {history.errors()}")
+        Follow these steps:
+        1. Navigate through {num_pages} listing pages, starting with 'https://www.gov.cn/zhengce/zuixin.htm'.
+        2. On each page, find all articles. For each one, check its publication date.
+        3. IF an article is on or after June 1, 2025, collect its `maintitle`, full `pub_url`, and `publish_date`.
+        4. IF an article is older, IGNORE it.
+        **URL EXTRACTION RULE: To get the `pub_url`, you MUST inspect the `<a>` link element for each article and extract its `href` attribute. This is the only way to get the correct and unique URL. Do not invent a URL.
+        Article URLs look like this: https://www.gov.cn/zhengce/202506/content_7027179.htm or https://www.gov.cn/zhengce/content/202506/content_7026294.htm
+        Sometimes the url maybe be structured like ../202506/content_7027179.htm, in this case you need to add https://www.gov.cn/zhengce/ to the beginning of the url.
+        5. CRITICAL: DO NOT navigate to the article detail pages. Your ONLY job is to create a list of articles to be processed later.
+        6. After scanning all {num_pages} pages, return the complete list of found articles.
+
+
+
+
+
+        """
+        main_agent = Agent(
+            task=discover_task, llm=llm, controller=discover_controller,
+            browser_session=browser_session, use_vision=True, max_failures=5
+        )
+
+        history = await main_agent.run(max_steps=50 * num_pages)
+        discovery_result_json = history.final_result()
+
+        if not discovery_result_json:
+            logging.warning("[Orchestrator] Phase 1 (Main Agent) failed to return any URLs.")
             return None
 
+        articles_to_process = ArticleInfoList.model_validate_json(discovery_result_json).posts
+        logging.info(f"[Orchestrator] Phase 1 complete. Found {len(articles_to_process)} recent articles.")
+        if not articles_to_process:
+            return []
+        for article in articles_to_process:
+            logging.info(f"[Orchestrator] url: {article.pub_url}")        
+
+        return articles_to_process
+
+        # --- Run Phase 2: Parallel "Extractor" Agents ---
+        logging.info("[Orchestrator] Starting Phase 2: Spawning parallel Extractor Agents...")
+        CONCURRENT_AGENTS = 5
+        semaphore = asyncio.Semaphore(CONCURRENT_AGENTS)
+        
+        tasks = [
+            extract_details_with_agent(article, browser_session, llm, semaphore)
+            for article in articles_to_process
+        ]
+        
+        scraped_results = await asyncio.gather(*tasks)
+        
+        final_articles = [res for res in scraped_results if res is not None]
+        
+        logging.info(f"[Orchestrator] Phase 2 complete. Successfully scraped details for {len(final_articles)} articles.")
+        logging.info(f"Total time for all phases: {time.time() - start_time:.2f} seconds")
+        
+        return final_articles
+
     except Exception as e:
-        logging.error(f"[China Scraper] An unexpected error occurred while running the agent: {e}", exc_info=True)
+        logging.error(f"[Orchestrator] An unexpected error occurred: {e}", exc_info=True)
         return None
     finally:
-        # The browser session is automatically closed by the agent unless keep_alive=True is set.
-        logging.info("[China Scraper] Browser session has been closed.")
+        # --- FIX 2: Correctly close the session ---
+        # The session object will always exist here. If start() failed, close() should handle it gracefully.
+        # The incorrect 'is_running' check is removed.
+        if browser_session:
+            logging.info("[Orchestrator] Closing shared browser session.")
+            await browser_session.close()
 
 
 async def run_scrape_and_update_status(job_id: str, num_pages: int):
-    """
-    This background task function now calls our new agent-based scraper.
-    """
-    logging.info(f"[Job {job_id}] Background scrape started for {num_pages} pages using AI Agent.")
+    logging.info(f"[Job {job_id}] Background scrape started using parallel AI agents.")
     try:
-        # --- MODIFIED: Call the new agent function ---
         data = await fetch_china_press_releases_agent(num_pages=num_pages)
-        # --- END MODIFICATION ---
-
         if data is not None:
             jobs[job_id]['status'] = 'completed'
             jobs[job_id]['result'] = {
                 "country": "China",
-                "method": "AI Agent (Browser Use)", # Updated method
+                "method": "Parallel AI Agents (Browser Use)",
                 "count": len(data),
-                "data": [item.dict() for item in data] # Convert Pydantic models to dicts for JSON serialization
+                "data": [item.dict() for item in data]
             }
             logging.info(f"[Job {job_id}] Background scrape completed successfully.")
         else:
             jobs[job_id]['status'] = 'failed'
-            jobs[job_id]['error_message'] = "Scraper finished but returned no data. The agent may have failed to complete the task or the website structure is too complex."
+            jobs[job_id]['error_message'] = "Scraper finished but returned no data. The agent may have failed or no recent articles were found."
             logging.warning(f"[Job {job_id}] Background scrape failed: No data returned.")
-
     except Exception as e:
         logging.error(f"[Job {job_id}] An unexpected error occurred in the background task: {e}", exc_info=True)
         jobs[job_id]['status'] = 'failed'
@@ -146,11 +198,8 @@ async def run_scrape_and_update_status(job_id: str, num_pages: int):
 async def trigger_china_scrape_job(background_tasks: BackgroundTasks, pages: int = 1):
     job_id = str(uuid.uuid4())
     jobs[job_id] = {"status": "pending", "result": None}
-
     background_tasks.add_task(run_scrape_and_update_status, job_id, pages)
-
     logging.info(f"[API] Job {job_id} created and scheduled for background execution.")
-
     return {
         "job_id": job_id,
         "status_url": f"/china/scrape/status/{job_id}"
